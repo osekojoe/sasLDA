@@ -1,0 +1,393 @@
+libname lda3 '/home/u63688618/uhasselt/LDA3';
+libname OUT '/home/u63688618/uhasselt/LDA3/out';
+
+proc sort data=lda3.hemodialysis out=sorted;
+	by id month;
+run; quit;
+
+proc transpose data=sorted out=hbtrans(drop=_NAME_) prefix=hb;
+    by id;
+    id month;
+	var hb;
+run; quit;
+
+proc transpose data=sorted out=dosetrans(drop=_NAME_) prefix=dose;
+    by id;
+    id month;
+	var dose;
+run; quit;
+
+
+proc transpose data=sorted out=irontrans(drop=_NAME_) prefix=iron;
+    by id;
+    id month;
+	var iron;
+run; quit;
+
+proc transpose data=sorted out=monthtrans(drop=_NAME_) prefix=month;
+    by id;
+    id month;
+	var month;
+run; quit;
+
+
+data extracted_columns;
+    set lda3.hemodialysis;
+    keep id sex age;
+run;
+
+proc sort data=extracted_columns out=extracted_columns;
+    by id;
+run; quit;
+
+data extracted;
+    set extracted_columns;
+    by id sex age;
+    if first.id then output; /* Keep only the first observation per ID and SEX */
+run;
+
+
+data lda3.hemodwid;
+	merge hbtrans dosetrans irontrans extracted;
+	by id;
+run; quit;
+
+
+proc sort data=lda3.hemodwid out=lda3.hemodwid;
+	by id;
+run; quit;
+
+proc mi data=lda3.hemodwid seed=486048 out=lda3.hemodwimput
+	 simple nimpute=10 round=0.1 minmaxiter=200000;
+	var sex age dose1 dose2 dose3 dose4 dose5 dose6
+		hb1 hb2 hb3 hb4 hb5 hb6
+		iron1 iron2 iron3 iron4 iron5 iron6;
+	*by id;
+run; quit;
+
+proc mi data=lda3.hemodwid seed=486048 out=lda3.hemodwimput
+	 simple nimpute=10 round=0.1 minimum=0 minmaxiter=200000;
+	var sex age dose1 dose2 dose3 dose4 dose5 dose6
+		hb1 hb2 hb3 hb4 hb5 hb6;
+		*iron1 iron2 iron3 iron4 iron5 iron6;
+	*by id;
+run;
+
+
+proc sort data=lda3.hemodwimput;
+	by _imputation_ id;
+run;
+
+*dichotomization;
+data lda3.hemodwimputbin;
+	set lda3.hemodwimput;
+	hbbin1=0; if hb1 <= 10 then hbbin1=1;
+	hbbin2=0; if hb2 <= 10 then hbbin2=1;
+	hbbin3=0; if hb3 <= 10 then hbbin3=1;
+	hbbin4=0; if hb4 <= 10 then hbbin4=1;
+	hbbin5=0; if hb5 <= 10 then hbbin5=1;
+	hbbin6=0; if hb6 <= 10 then hbbin6=1;
+	if hb1=. then hbbin1=.;
+	if hb2=. then hbbin2=.;
+	if hb3=. then hbbin3=.;
+	if hb4=. then hbbin4=.;
+	if hb5=. then hbbin5=.;
+	if hb6=. then hbbin6=.;
+run;
+
+*Transforming horizontal dataset in vertical dataset:;
+data lda3.hemodvimputbin;
+set lda3.hemodwimputbin;
+array a (6) hbbin1 hbbin2 hbbin3 hbbin4 hbbin5 hbbin6;
+array b (6) hbb1 hbb2 hbb3 hbb4 hbb5 hbb6;
+array c (6) dose1 dose2 dose3 dose4 dose5 dose6;
+do j=1 to 6;
+	hbbin=a(j);
+	hb=b(j);
+	dose=c(j);
+	time=j;
+	output;
+end;
+run;
+
+data lda3.hemodvimputbin;
+	set lda3.hemodvimputbin;
+	timecls = time;
+run;
+
+proc sort data=lda3.hemodvimputbin;
+	by _imputation_ id time;
+run; quit;
+
+
+proc genmod data=lda3.hemodvimputbin;
+	class id timecls;
+	by _imputation_;
+	model hbbin = time dose sex age  / noint dist=binomial covb;
+	repeated subject=id / withinsubject=timecls type=exch modelse;
+	ods output parameterestimates=gmparms parminfo=gmpinfo CovB=gmcovb;
+	*ods output close;
+run; quit;
+
+data gmpinfo;
+	set gmpinfo;
+	if parameter='Prm1' then delete;
+run;
+
+proc print data=gmparms;
+run;
+
+proc print data=gmcovb;
+run;
+
+proc print data=gmpinfo;
+run;
+
+proc mianalyze parms=gmparms covb=gmcovb parminfo=gmpinfo wcov bcov tcov;
+	modeleffects time dose sex age;
+run;
+quit;
+
+/**********full imputation process with missing covariates*************/
+ods graphics on;
+proc mi data=lda3.hemodwid seed=1305417 nimpute=10 out=outex8;
+	class sex iron1 iron2 iron3 iron4 iron5 iron6;
+	fcs plots=trace
+		logistic(iron1 iron2 iron3 iron4 iron5 iron6 = sex age dose1 dose2 dose3 dose4 dose5 dose6 / details link=glogit);
+	var sex age dose1 dose2 dose3 dose4 dose5 dose6 iron1 iron2 iron3 iron4 iron5 iron6;
+run; quit;
+
+ods graphics on; *works;
+proc mi data=lda3.hemodwid seed=1305417 nimpute=10 out=lda3.outex10;
+	class sex iron1 iron2 iron3 iron4 iron5 iron6;
+	*fcs nbiter=20 reg (hb1 hb2 hb3 hb4 hb5 hb6 dose1 dose2 dose3 dose4
+	dose5 dose6 /details) logistic (iron1 iron2 iron3 iron4 iron5 iron6
+		/ details likelihood=augment);
+	fcs nbiter=20 reg (hb1 hb2 hb3 hb4 hb5 hb6 dose1 dose2 dose3 dose4
+	dose5 dose6 /details) discrim (sex iron1 iron2 iron3 iron4 iron5 iron6
+		/ classeffects=include details);
+
+	var sex age dose1 dose2 dose3 dose4 dose5 dose6 iron1 iron2 iron3
+		iron4 iron5 iron6 hb1 hb2 hb3 hb4 hb5 hb6;
+run; quit;
+
+proc sort data=lda3.outex10;
+	by _imputation_ id;
+run;
+
+*dichotomiization;
+data lda3.outexbin10;
+	set lda3.outex10;
+	hbbin1=0; if hb1 <= 10 then hbbin1=1;
+	hbbin2=0; if hb2 <= 10 then hbbin2=1;
+	hbbin3=0; if hb3 <= 10 then hbbin3=1;
+	hbbin4=0; if hb4 <= 10 then hbbin4=1;
+	hbbin5=0; if hb5 <= 10 then hbbin5=1;
+	hbbin6=0; if hb6 <= 10 then hbbin6=1;
+	if hb1=. then hbbin1=.;
+	if hb2=. then hbbin2=.;
+	if hb3=. then hbbin3=.;
+	if hb4=. then hbbin4=.;
+	if hb5=. then hbbin5=.;
+	if hb6=. then hbbin6=.;
+run;
+
+*Transforming horizontal dataset in vertical dataset:;
+data lda3.outexbinvert10;
+set lda3.outexbin10;
+	sexc=0; if sex=2 then sexc=1;
+	array a (6) hbbin1 hbbin2 hbbin3 hbbin4 hbbin5 hbbin6;
+	array b (6) hb1 hb2 hb3 hb4 hb5 hb6;
+	array c (6) dose1 dose2 dose3 dose4 dose5 dose6;
+	array d (6) iron1 iron2 iron3 iron4 iron5 iron6;
+	do j=1 to 6;
+		hbbin=a(j);
+		hb=b(j);
+		dose=c(j);
+		iron=d(j);
+		time=j;
+		timecls=j; *class copy of time;
+	output;
+end;
+run;
+
+
+data lda3.outexbinvert10;
+    set lda3.outexbinvert10;
+    keep _imputation_ id time timecls hb hbbin sex age dose iron age;
+run;
+quit;
+
+/*********/
+* dummies for class variables !! not necessary;
+data out.outexbinvert11;
+set lda3.outexbinvert10;
+	*sexc = put(sex, 8.); *create class variable;
+	sexc=0; if sex=2 then sexc=1;
+	time1=0;
+	time2=0;
+	time3=0;
+	time4=0;
+	time5=0;
+	time6=0;
+	irontime1=0;
+	irontime2=0;
+	irontime3=0;
+	irontime4=0;
+	irontime5=0;
+	irontime6=0;
+	sextime1=0;
+	sextime2=0;
+	sextime3=0;
+	sextime4=0;
+	sextime5=0;
+	sextime6=0;
+		if time=1 then time1=1;
+		if time=2 then time2=1;
+		if time=3 then time3=1;
+		if time=4 then time4=1;
+		if time=5 then time5=1;
+		if time=6 then time6=1;
+		if (time=1 & iron=1) then irontime1=1;
+		if (time=2 & iron=1) then irontime2=1;
+		if (time=3 & iron=1) then irontime3=1;
+		if (time=4 & iron=1) then irontime4=1;
+		if (time=5 & iron=1) then irontime5=1;
+		if (time=6 & iron=1) then irontime6=1;
+		if (time=1 & sex=1) then sextime1=1;
+		if (time=2 & sex=1) then sextime2=1;
+		if (time=3 & sex=1) then sextime3=1;
+		if (time=4 & sex=1) then sextime4=1;
+		if (time=5 & sex=1) then sextime5=1;
+		if (time=6 & sex=1) then sextime6=1;
+run;
+/***********************/
+
+proc sort data=out.outexbinvert11;
+	by _imputation_ id time;
+run; quit;
+
+*add printmle to repeated statement otherwise no params output - works;
+ods trace on;
+proc genmod data=lda3.outexbinvert10;
+ods output ParameterEstimates=gmparms parminfo=gmpinfo CovB=gmcovb;
+	class id timecls sexc iron;
+	by _imputation_;
+	model hbbin = time dose sexc age iron time*dose time*sexc time*age
+		time*iron / noint dist=binomial covb;
+	repeated subject=id / withinsubject=timecls type=exch modelse printmle;
+	*ods output close;
+run; quit;
+
+* dummies for class variables !! not necessary;
+*ods trace on;
+proc genmod data=out.outexbinvert11;
+ods output ParameterEstimates=gmparms parminfo=gmpinfo CovB=gmcovb;
+	class id timecls;
+	by _imputation_;
+	model hbbin = time1 time2 time3 time4 time5 time6 time*dose time*age sextime1
+		sextime2 sextime3 sextime4 sextime5 sextime6 irontime1
+		irontime2 irontime3 irontime4 irontime5 irontime6 / noint dist=binomial covb;
+	repeated subject=id / withinsubject=timecls type=exch modelse printmle;
+	*ods output close;
+run; quit;
+
+
+data gmpinfo;
+	set gmpinfo;
+	if parameter='Prm1' then delete;
+	if parameter='Prm5' then delete;
+	if parameter='Prm8' then delete;
+	if parameter='Prm11' then delete;
+	if parameter='Prm14' then delete;
+run;
+
+* Remove the reference group;
+data gmparms;
+set gmparms;
+* Check condition to delete rows ;
+	if 1 <= _imputation_ <= 10 and ( Level1 = '1') then delete ;
+run;
+
+proc print data=gmparms;
+run;
+
+proc print data=gmcovb;
+run;
+
+proc print data=gmpinfo;
+run;
+
+
+proc mianalyze parms=gmparms covb=gmcovb parminfo=gmpinfo wcov bcov tcov;
+	*class sexc iron;
+	modeleffects time dose sexc age iron time*dose time*sexc time*age
+		time*iron;
+run;
+quit;
+
+
+/************GLMM*******************************/
+
+*direct likelihood;
+proc glimmix data=lda3.hemodlagbin method=laplace; *method=quad(qpoints=20);
+	nloptions maxiter=50 technique=newrap;
+	class sex iron;
+	model hbbin = month dose sex age iron month*dose month*sex month*age month*iron / noint solution dist=binary;
+	random intercept / subject=id type=un g gcorr;
+run;
+
+*GLMM after imputation;
+proc nlmixed data=lda3.outexbinvert10 qpoints=20 maxiter=100 technique=newrap cov ecov;
+	by _imputation_;
+	parms beta11=0.1024 beta12=-0.00908 beta13=3.3892 beta14=0.009972
+		beta15=-0.5454 beta22=-0.00033 beta23=-0.08092 beta24=-0.00239 beta25=0.1062 tau=2;
+	eta = beta11*time+beta12*dose+beta13*sex+beta14*age+beta15*iron+b
+		+beta22*dose*time+beta23*sex*time+beta24*age*time+beta25*iron*time;
+	p = exp(eta)/(1+exp(eta));
+	model hbbin ~ binary(p);
+	random b ~ normal(0,tau*tau) subject=id;
+	estimate 'tau2' tau*tau;
+	ods output ParameterEstimates=out.nlparms CovMatParmEst=out.nlcovb
+		AdditionalEstimates=out.nlparmsa CovMatAddEst=out.nlcovba;
+run; quit;
+
+proc mianalyze parms=out.nlparms covb=out.nlcovb;
+	title ’MIANALYZE for NLMIXED’;
+	modeleffects beta11 beta12 beta13 beta14 beta15 beta22 beta23 beta24 beta25 tau;
+run;
+
+proc glimmix data=lda3.outexbinvert10 method=laplace;*method=quad(qpoints=20);
+	nloptions maxiter=50 technique=newrap;
+	class id sexc iron;
+	by _imputation_;
+	model hbbin = time dose sexc age iron time*dose time*sexc time*age
+		time*iron / noint solution dist=binary;
+	random intercept time / subject=id type=un g gcorr;
+run; quit;
+
+
+/****************direct likelihood *****************/
+
+data lda3.hemod;
+	set lda3.hemodialysis;
+	IF id = . THEN DELETE;
+run;
+
+
+DATA lda3.hemodbin;
+    SET lda3.hemod;
+	IF id = . THEN DELETE;
+    /* Initialize HBBIN based on HB */
+    IF HB = . THEN HBBIN = .; /* Handle missing HB explicitly */
+    ELSE IF HB <= 10 THEN HBBIN = 1; /* HB <= 10 gets category 1 */
+    ELSE HBBIN = 0; /* HB > 10 gets category 0 */
+RUN;
+
+proc glimmix data=lda3.hemodlagbin method=quad(qpoints=20);
+	nloptions maxiter=50 technique=newrap;
+	class sex iron;
+	model hbbin = dose month dose*month age age*month sex sex*month iron iron*month / noint solution dist=binary;
+	random intercept month / subject=id type=un g gcorr;
+run;
+
