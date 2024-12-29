@@ -1,0 +1,152 @@
+libname lda3 '/home/u63688618/uhasselt/LDA3';
+libname OUT '/home/u63688618/uhasselt/LDA3/out';
+
+/*********** NCMV **********************/
+*creating monotone missingness;
+
+proc mi data=lda3.hemodwid seed=10705 simple out=monotone nimpute=10 round=0.1;
+	title "Monotone imputation";
+	var sex age dose1 dose2 dose3 dose4 dose5 dose6
+		hb1 hb2 hb3 hb4 hb5 hb6;
+		*iron1 iron2 iron3 iron4 iron5 iron6;
+	mcmc impute=monotone;
+run;
+
+*check if monotone;
+proc mi data=monotone seed=15541 nimpute=0;
+	var sex age dose1 dose2 dose3 dose4 dose5 dose6
+		hb1 hb2 hb3 hb4 hb5 hb6;
+		*iron1 iron2 iron3 iron4 iron5 iron6;
+run;
+
+* MNAR imputation for ncmv ;
+proc mi data=monotone seed=486048 simple out=ncmv_monotone nimpute=1;
+	title 'Model multiple imputation';
+	var sex age dose1 dose2 dose3 dose4 dose5 dose6
+		hb1 hb2 hb3 hb4 hb5 hb6;
+	monotone reg;
+	mnar model (hb1 hb2 hb3 hb4 hb5 hb6 dose1 dose2 dose3 dose4 dose5 dose6
+		/ modelobs=ncmv);
+run;
+
+*Transforming horizontal dataset in vertical dataset:;
+data ncmv;
+set ncmv_monotone;
+array b (6) hb1 hb2 hb3 hb4 hb5 hb6;
+array c (6) dose1 dose2 dose3 dose4 dose5 dose6;
+*array d (6) iron1 iron2 iron3 iron4 iron5 iron6;
+do j=1 to 6;
+	hb=b(j);
+	dose=c(j);
+	*iron=d(j);
+	time=j;
+	timecls=j; *class copy of time;
+	patid2=1000*_imputation_+id;
+	output;
+end;
+run;
+
+data out.ncmvkeep;
+    set ncmv;
+    keep _imputation_ id patid2 time timecls hb sex age dose age;
+run;
+quit;
+
+proc sort data=out.ncmvkeep;
+	by _imputation_ id;
+run;
+
+
+/* Fitting the LMM under NCMV */
+proc mixed data=out.ncmvkeep method=REML plots(maxpoints=1000) noclprint noitprint
+	asycov covtest;
+	title 'Model per pattern';
+	class id sex timecls;
+	by _Imputation_;
+	model hb = time dose age time*dose time*age / s
+	chisq ;
+	random intercept / type = un subject = id g gcorr v vcorr solution ;
+	repeated timecls / type = un subject = id r rcorr;
+	ods output SolutionF = mixparms covB = mixcovb;
+run;
+
+proc print data=mixparms (obs=100);
+	var _Imputation_ Effect sex Estimate StdErr;
+	title 'MIXED Model Coefficients (First Two Imputations)';
+run;
+
+* combined analysis of ncmv ;
+proc mianalyze parms = mixparms;
+	modeleffects time dose age time*dose time*age;
+run;
+
+*make non-binary binary ;
+data monotone1;
+	set monotone;
+	if iron1=. then iron1=.;
+	if iron2=. then iron2=.;
+	if iron3=. then iron3=.;
+	if iron4=. then iron4=.;
+	if iron5=. then iron5=.;
+	if iron6=. then iton6=.;
+	iron1=1; if iron1 < 0.5 then iron1=0;
+	iron2=1; if iron1 < 0.5 then iron2=0;
+	iron3=1; if iron1 < 0.5 then iron3=0;
+	iron4=1; if iron1 < 0.5 then iron4=0;
+	iron5=1; if iron1 < 0.5 then iron5=0;
+	iron6=1; if iron1 < 0.5 then iron6=0;
+run;
+
+
+/********CCMV*******/
+/*Imputing for CCMV */
+proc mi data = monotone seed = 17200705 simple out = monotone_ccmv nimpute = 1;
+	title 'Model multiple imputation';
+	var sex age dose1 dose2 dose3 dose4 dose5 dose6
+		hb1 hb2 hb3 hb4 hb5 hb6;
+	monotone reg;
+	mnar model (hb1 hb2 hb3 hb4 hb5 hb6 dose1 dose2 dose3 dose4 dose5 dose6
+		/ modelobs=ccmv);
+run;
+
+*Transforming horizontal dataset in vertical dataset:;
+data ccmv;
+set monotone_ccmv;
+array b (6) hb1 hb2 hb3 hb4 hb5 hb6;
+array c (6) dose1 dose2 dose3 dose4 dose5 dose6;
+*array d (6) iron1 iron2 iron3 iron4 iron5 iron6;
+do j=1 to 6;
+	hb=b(j);
+	dose=c(j);
+	*iron=d(j);
+	time=j;
+	timecls=j; *class copy of time;
+	*patid2=1000*_imputation_+id;
+	output;
+end;
+run;
+
+data out.ccmvkeep;
+    set ccmv;
+    keep _imputation_ id time timecls hb sex age dose age;
+run;
+quit;
+
+/* Fitting the LMM under CCMV */
+proc mixed data=out.ccmvkeep method=REML noclprint noitprint
+	asycov covtest;
+	title 'Model per pattern';
+	class id sex timecls;
+	by _Imputation_;
+	model hb = time dose age time*dose time*age / s
+	chisq ;
+	random intercept / type=un subject=id g gcorr v vcorr solution ;
+	repeated timecls / type=un subject=id r rcorr;
+	ods output SolutionF = mixparms1;
+run;
+
+* combined analysis of ncmv ;
+proc mianalyze parms = mixparms1;
+	modeleffects time dose age time*dose time*age;
+run;
+
